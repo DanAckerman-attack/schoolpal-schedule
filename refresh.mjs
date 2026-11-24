@@ -115,6 +115,13 @@ async function main() {
       if (tt.status !== 200 || tt.json?.code !== 0) errors.push(`${sc.schoolName}: GetDefaultView ${tt.status}`);
       const list = tt.json?.data || [];
       m.count = list.length;
+      // 服务端"我的课数"：权威口径（晚辅靠班级人员关系关联，主教师字段里没有本人）
+      const mc = await req('/next-edu-admin/ToB/PC/Timetable/GetMyCountByDate', {
+        auth: schoolAuth, tenant,
+        body: { address: { addressType: 1, addressIds: [] }, teacherIds: [], sourceTypes: [], startDateTime: START, endDateTime: END },
+      });
+      m.myCounts = {};
+      ((mc.json?.data) || []).forEach((x) => { m.myCounts[String(x.date).slice(0, 10)] = x.timetableCount; });
       list.forEach((r) => rows.push({ ...r, _school: sc.schoolName }));
     } catch (e) {
       errors.push(`${sc.schoolName}: ${String(e).slice(0, 120)}`);
@@ -132,8 +139,35 @@ async function main() {
     } catch { /* ignore */ }
   }
 
-  const mine = rows.filter((r) => String(r.mainTeacherId) === String(staffId) ||
-    (r.timetableTeachers || []).some((x) => String(x.teacherId || x.id) === String(staffId)));
+  const isMine = (r) => String(r.mainTeacherId) === String(staffId) ||
+    (r.timetableTeachers || []).some((x) => String(x.teacherId || x.id) === String(staffId));
+  const base = rows.filter(isMine);
+
+  // 补全：晚辅/晚自习由班级人员关系关联，接口不把本人写进 mainTeacherId。
+  // 以服务端 GetMyCountByDate 逐日核对，差额从当日其余条目补足（优先晚辅类）。
+  const dayKey = (r) => r._school + '|' + String(r.lessonDay).slice(0, 10);
+  const kept = {};
+  base.forEach((r) => { const k = dayKey(r); kept[k] = (kept[k] || 0) + 1; });
+  const keptIds = new Set(base.map((r) => r.id));
+  const scoreOf = (r) => {
+    const t = String(r.title || r.lessonName || '');
+    if (/晚自习|晚辅|自习|值班|辅导|答疑/.test(t)) return 2;
+    if (r.isOrgCreated) return 1;
+    return 0;
+  };
+  const extra = [];
+  meta.forEach((m) => {
+    Object.entries(m.myCounts || {}).forEach(([date, n]) => {
+      let need = Number(n || 0) - (kept[m.name + '|' + date] || 0);
+      if (need <= 0) return;
+      const cands = rows
+        .filter((r) => !keptIds.has(r.id) && r._school === m.name && String(r.lessonDay).slice(0, 10) === date)
+        .sort((a, b) => scoreOf(b) - scoreOf(a) || a.startMinutes - b.startMinutes);
+      for (const c of cands) { if (need <= 0) break; extra.push(c); keptIds.add(c.id); need--; }
+    });
+  });
+  extra.forEach((r) => { r._reconciled = true; });
+  const mine = base.concat(extra);
 
   const items = mine.map((r) => ({
     d: String(r.lessonDay).slice(0, 10),
@@ -141,6 +175,7 @@ async function main() {
     e: r.endMinutes,
     t: maskText(r.title || r.lessonName),
     c: r._school,
+    late: (/晚自习|晚辅|自习/.test(String(r.title || r.lessonName || '')) || r._reconciled) ? 1 : 0,
     done: !!r.isFinished,
   })).sort((a, b) => (a.d === b.d ? a.s - b.s : a.d < b.d ? -1 : 1));
 
@@ -180,7 +215,7 @@ function render(p) {
   const upd = bj;
   const mineCnt = {};
   p.campus.forEach((c) => { mineCnt[c.name] = 0; });
-  p.items.forEach((i) => { mineCnt[i.c] = (mineCnt[i.c] || 0) + 1; });
+  p.items.forEach((i) => { if (!i.late) mineCnt[i.c] = (mineCnt[i.c] || 0) + 1; });
   const campusStat = p.campus.map((c) => `${c.name.replace('校区', '')} ${mineCnt[c.name] || 0}`).join(' ｜ ');
 
   return `<!DOCTYPE html>
@@ -216,6 +251,12 @@ body{margin:0;background:#f5f6f8;color:#111827;font:15px/1.5 -apple-system,Blink
 .ev.today{border-color:#bfdbfe;background:#f8fbff}
 .empty{text-align:center;color:#9ca3af;font-size:13px;padding:34px 0}
 .ft{padding:22px 16px 0;font-size:11.5px;color:#9ca3af;line-height:1.75}
+
+.chip.late{border-style:dashed;background:#fafbfc}
+.ev.late{background:repeating-linear-gradient(135deg,#f6f7f9,#f6f7f9 6px,#eef0f3 6px,#eef0f3 12px)}
+.ev.late .bar{background:#9aa4b2!important}
+.ev.late .ti{color:#4b5563}
+.tag{display:inline-block;font-size:10px;padding:1px 5px;margin-right:4px;border:1px solid #d5dae1;border-radius:4px;color:#5b6572;background:#fff;vertical-align:1px}
 </style></head>
 <body>
 <div class="hd">
@@ -250,12 +291,14 @@ body{margin:0;background:#f5f6f8;color:#111827;font:15px/1.5 -apple-system,Blink
       return '<button class="tab'+(off===k?' on':'')+'" data-k="'+k+'">'+lb+'</button>';
     }).join('');
     var wk=IT.filter(function(i){return ds.indexOf(i.d)>-1});
+    var wkC=wk.filter(function(i){return !i.late}), wkL=wk.filter(function(i){return i.late});
     var mins=0,cnt={};
-    wk.forEach(function(i){mins+=i.e-i.s;cnt[i.c]=(cnt[i.c]||0)+1});
+    wkC.forEach(function(i){mins+=i.e-i.s;cnt[i.c]=(cnt[i.c]||0)+1});
     var stat=Object.keys(cnt).map(function(k){return k.replace('校区','')+' '+cnt[k]}).join(' · ')||'—';
     document.getElementById('sum').innerHTML=
-      '<div class="chip"><b>'+wk.length+'</b>节课</div>'+
+      '<div class="chip"><b>'+wkC.length+'</b>节课</div>'+
       '<div class="chip"><b>'+(mins/60).toFixed(1)+'</b>小时</div>'+
+      '<div class="chip late"><b>'+wkL.length+'</b>节晚辅</div>'+
       '<div class="chip"><b style="font-size:13px;padding-top:4px">'+stat+'</b>校区</div>';
     var h='';
     var any=false;
@@ -266,10 +309,10 @@ body{margin:0;background:#f5f6f8;color:#111827;font:15px/1.5 -apple-system,Blink
       h+='<div class="day"><div class="t"><b>'+WD[i]+'</b>'+(d.getMonth()+1)+'/'+d.getDate()+(k===today?' <span class="today">今天</span>':'')+'</div>';
       list.forEach(function(x){
         var c=COL[x.c]||'#2563eb';
-        h+='<div class="ev'+(x.done?' done':'')+(k===today?' today':'')+'">'+
+        h+='<div class="ev'+(x.late?' late':'')+(x.done?' done':'')+(k===today?' today':'')+'">'+
            '<div class="bar" style="background:'+c+'"></div>'+
-           '<div class="main"><div class="ti">'+x.t+'</div>'+
-           '<div class="mt">'+x.c+(x.done?' · 已完成':'')+'</div></div>'+
+           '<div class="main"><div class="ti">'+(x.late?'<span class="tag">晚辅</span>':'')+x.t+'</div>'+
+           '<div class="mt">'+x.c+(x.done?' · 已完成':'')+(x.late?' · 不计课时':'')+'</div></div>'+
            '<div class="tm">'+hm(x.s)+'<br><span style="color:#9ca3af;font-weight:400">'+hm(x.e)+'</span></div>'+
            '</div>';
       });
