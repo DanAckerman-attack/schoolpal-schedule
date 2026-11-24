@@ -172,7 +172,12 @@ async function main() {
 function render(p) {
   const data = JSON.stringify(p).replace(/</g, '\\u003c');
   const ts = new Date(p.updatedAt);
-  const upd = `${ts.getFullYear()}-${pad(ts.getMonth() + 1)}-${pad(ts.getDate())} ${pad(ts.getHours())}:${pad(ts.getMinutes())}`;
+  // 服务器是 UTC，强制换算为北京时间，避免"更新于"显示成 UTC 时刻
+  const bj = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(ts).replace('T', ' ');
+  const upd = bj;
   const mineCnt = {};
   p.campus.forEach((c) => { mineCnt[c.name] = 0; });
   p.items.forEach((i) => { mineCnt[i.c] = (mineCnt[i.c] || 0) + 1; });
