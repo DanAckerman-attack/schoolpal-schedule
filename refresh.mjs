@@ -208,6 +208,8 @@ async function main() {
   const outDir = path.join(ROOT, 'public');
   fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(path.join(outDir, 'index.html'), html, 'utf8');
+  // 不让搜索引擎收录个人课表页
+  fs.writeFileSync(path.join(outDir, 'robots.txt'), 'User-agent: *\nDisallow: /\n', 'utf8');
 
   // 供 Actions 日志查看（不含姓名）
   console.log(JSON.stringify({
@@ -239,6 +241,8 @@ function render(p) {
 <html lang="zh-CN"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#2563eb">
 <title>我的课表</title>
 <style>
@@ -285,7 +289,7 @@ body{margin:0;background:#f5f6f8;color:#111827;font:15px/1.5 -apple-system,Blink
 <div class="tabs" id="tabs"></div>
 <div class="sum" id="sum"></div>
 <div class="wrap" id="list"></div>
-<div class="ft">数据来源：校宝教培管理系统，云端每日自动刷新。学员姓名已打码。<br>范围：${p.range}</div>
+<div class="ft">数据来源：校宝教培管理系统，云端每日自动刷新。学员姓名已打码。<br>范围：${p.range}<br>本页是静态课表快照：没有任何登录入口，不需要也无法在这里输入账号密码。</div>
 <script type="application/json" id="data">${data}</script>
 <script>
 (function(){
