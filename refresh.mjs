@@ -31,13 +31,29 @@ async function req(p, { method = 'POST', body, auth, tenant, bearer } = {}) {
   if (tenant) headers['xb-gw-tenant-key'] = tenant;
   if (bearer) headers.Authorization = 'bearer ' + bearer;
   else if (auth) headers.Authorization = auth;
-  const r = await fetch(BASE + p, {
-    method, headers, body: method === 'GET' ? undefined : JSON.stringify(body || {}),
-  });
-  const text = await r.text();
-  let json = null;
-  try { json = JSON.parse(text); } catch { /* 非 JSON */ }
-  return { status: r.status, json, text: text.slice(0, 300) };
+
+  // 网络抖动是常态（曾出现 fetch failed / 连接超时），重试 3 次，避免某个校区被静默漏掉
+  let lastErr;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const r = await fetch(BASE + p, {
+        method, headers, body: method === 'GET' ? undefined : JSON.stringify(body || {}),
+      });
+      const text = await r.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch { /* 非 JSON */ }
+      if (r.status >= 500 && attempt < 3) {
+        lastErr = new Error(`服务端 ${r.status}`);
+        await sleep(700 * attempt);
+        continue;
+      }
+      return { status: r.status, json, text: text.slice(0, 300) };
+    } catch (e) {
+      lastErr = e;
+      if (attempt < 3) await sleep(700 * attempt);
+    }
+  }
+  throw lastErr;
 }
 
 async function login() {
@@ -185,6 +201,7 @@ async function main() {
     range: `${START} ~ ${END}`,
     campus: meta,
     items,
+    errors,
   };
 
   const html = render(payload);
@@ -230,6 +247,7 @@ body{margin:0;background:#f5f6f8;color:#111827;font:15px/1.5 -apple-system,Blink
 .hd{background:#fff;padding:18px 16px 14px;border-bottom:1px solid #e5e7eb;position:sticky;top:0;z-index:9}
 .hd h1{margin:0;font-size:19px;letter-spacing:-.2px}
 .hd .sub{font-size:12px;color:#6b7280;margin-top:5px;line-height:1.6}
+.warn{margin-top:9px;padding:8px 10px;border:1px solid #f5d0a9;background:#fffaf0;color:#9a5b12;border-radius:8px;font-size:12px;line-height:1.6}
 .tabs{display:flex;gap:8px;padding:12px 16px 4px;overflow-x:auto}
 .tab{flex:0 0 auto;border:1px solid #e5e7eb;background:#fff;color:#374151;border-radius:9px;padding:7px 14px;font-size:13px;font-family:inherit}
 .tab.on{background:#2563eb;border-color:#2563eb;color:#fff}
@@ -262,6 +280,7 @@ body{margin:0;background:#f5f6f8;color:#111827;font:15px/1.5 -apple-system,Blink
 <div class="hd">
   <h1>我的课表</h1>
   <div class="sub">${p.staff || ''} · 三校区合并<br>更新于 ${upd} ｜ ${campusStat}</div>
+  ${(p.errors && p.errors.length) ? `<div class="warn">本次有校区未取到数据，页面可能缺课：${p.errors.map((e) => String(e).replace(/[<>]/g, '')).join('；')}。稍后会自动重试。</div>` : ''}
 </div>
 <div class="tabs" id="tabs"></div>
 <div class="sum" id="sum"></div>
