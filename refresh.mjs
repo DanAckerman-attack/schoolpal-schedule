@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { notifyToday } from './notify.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const BASE = 'https://pc.schoolpal.cn';
@@ -210,6 +211,16 @@ async function main() {
   fs.writeFileSync(path.join(outDir, 'index.html'), html, 'utf8');
   // 不让搜索引擎收录个人课表页
   fs.writeFileSync(path.join(outDir, 'robots.txt'), 'User-agent: *\nDisallow: /\n', 'utf8');
+
+  // 每天推一条「今天上什么课」到微信（未配置密钥则自动跳过；推送失败不影响页面）
+  await notifyToday(mine.map((r) => ({
+    d: String(r.lessonDay).slice(0, 10),
+    s: r.startMinutes,
+    e: r.endMinutes,
+    t: maskText(r.title || r.lessonName),
+    c: r._school,
+    late: (/晚自习|晚辅|自习/.test(String(r.title || r.lessonName || '')) || r._reconciled) ? 1 : 0,
+  })));
 
   // 供 Actions 日志查看（不含姓名）
   console.log(JSON.stringify({

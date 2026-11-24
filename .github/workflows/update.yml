@@ -34,6 +34,9 @@ jobs:
         env:
           SP_PHONE: ${{ secrets.SP_PHONE }}
           SP_PASS: ${{ secrets.SP_PASS }}
+          # 微信通知：二选一，配了哪个就用哪个；都没配则自动跳过
+          SC_SENDKEY: ${{ secrets.SC_SENDKEY }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
         run: node refresh.mjs
 
       - name: 检查产物
