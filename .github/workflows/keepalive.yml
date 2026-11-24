@@ -1,0 +1,50 @@
+name: 保活
+
+# 目的：GitHub 会在仓库连续 60 天无活动后自动停用定时任务。
+# 本工作流定期提交一个时间戳文本，让仓库保持"活跃"，从而保证「更新课表」的每日定时不被停用。
+
+on:
+  schedule:
+    # 每月 1 号 UTC 01:00（北京时间 09:00）——比 60 天窗口更密，且每月都会自动验证一次
+    - cron: '0 1 1 * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - '.keepalive/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    # 机器人自己提交的变更不再触发，避免循环
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 写入心跳时间
+        run: |
+          mkdir -p .keepalive
+          {
+            echo "最后一次保活：$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S %Z')"
+            echo "UTC：$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "作用：保持仓库活跃，防止 GitHub 停用每日定时刷新。"
+          } > .keepalive/last-ping.txt
+          cat .keepalive/last-ping.txt
+
+      - name: 提交并推送
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .keepalive/last-ping.txt
+          if git diff --cached --quiet; then
+            echo "内容无变化，跳过提交"
+            exit 0
+          fi
+          git commit -m "chore(keepalive): 保活心跳 $(TZ=Asia/Shanghai date '+%Y-%m-%d')"
+          git push

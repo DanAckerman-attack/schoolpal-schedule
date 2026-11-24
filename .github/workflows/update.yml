@@ -7,6 +7,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    # 保活心跳的提交只动 .keepalive，不触发课表刷新
+    paths-ignore:
+      - '.keepalive/**'
 
 permissions:
   contents: read
